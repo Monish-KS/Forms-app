@@ -1,0 +1,64 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  role          String    @default("user") // "admin" or "user"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  forms         Form[]
+  sessions      FormSession[]
+}
+
+model Form {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  createdById   String
+  createdBy     User      @relation(fields: [createdById], references: [id])
+  fields        Field[]
+  sharedResponse SharedResponse?
+  sessions      FormSession[]
+}
+
+model Field {
+  id            String    @id @default(cuid())
+  type          String    // e.g., "text", "number", "dropdown"
+  label         String
+  options       String[]  // For dropdowns, store as JSON string array
+  formId        String
+  form          Form      @relation(fields: [formId], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model SharedResponse {
+  id            String    @id @default(cuid())
+  formId        String    @unique
+  form          Form      @relation(fields: [formId], references: [id])
+  values        Json      // Store form data as JSON object
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model FormSession {
+  id            String    @id @default(cuid())
+  formId        String
+  form          Form      @relation(fields: [formId], references: [id])
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  lastActive    DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
