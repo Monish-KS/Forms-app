@@ -36,7 +36,7 @@ export default function FormEditor({ form, onSave, onCancel }: FormEditorProps) 
     if (key === "options" && typeof value === "string") {
       newFields[index][key] = value.split(",").map((opt) => opt.trim());
     } else {
-      (newFields[index] as any)[key] = value; // Still need any for dynamic key assignment
+      (newFields[index] as Record<keyof FormField, unknown>)[key] = value;
     }
     setFields(newFields);
   };

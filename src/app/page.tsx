@@ -36,6 +36,11 @@ export default function Home() {
               View All Forms
             </Link>
           </div>
+          <div className="mt-4">
+            <Link href="/join-form" className="bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded">
+              Join Form with Code
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="text-center">

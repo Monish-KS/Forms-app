@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { getSocket } from "@/lib/socket";
 import { useFormStore } from "@/lib/store";
 import { Socket } from "socket.io-client";
+import { use } from "react";
 
 interface FormField {
   id: string;
@@ -25,25 +26,16 @@ interface Form {
   };
 }
 
-export default function CollaborativeFormPage({ params }: { params: { formId: string } }) {
-  const { formId } = params; // This line is causing the error
-  // To fix this, we need to unwrap params using React.use()
-  // const { formId } = React.use(Promise.resolve(params)); // Example of how it might be used in a server component
-  // However, since this is a client component, we need to ensure params is not a Promise.
-  // The error message indicates it's a warning for migration, so direct access might still work for now,
-  // but it's better to address the root cause or ensure it's not a Promise.
-  // For now, let's assume params is directly accessible as per the current setup,
-  // and the warning is just a heads-up for future Next.js versions.
-  // If it truly is a Promise, the structure of the page component might need to change
-  // to be a server component or fetch the formId differently.
-
-  // Given the error, it seems `params` is indeed being treated as a Promise.
-  // Let's try to destructure it directly, as the warning suggests it's still supported for migration.
-  // If the issue persists, we might need to re-evaluate the component's rendering environment.
+export default function CollaborativeFormPage({ params }: { params: Promise<{ formId: string }> }) {
+  const { formId } = use(params);
   const { data: session, status } = useSession();
   const router = useRouter();
   const { fields, sharedResponse, lockedFields, setForm, updateField, lockField, unlockField } = useFormStore();
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isFormLoading, setIsFormLoading] = useState(true);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({}); // fieldId -> array of userIds
+  const typingTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   useEffect(() => {
     if (status === "loading") return;
@@ -53,13 +45,26 @@ export default function CollaborativeFormPage({ params }: { params: { formId: st
     }
 
     const fetchForm = async () => {
-      const res = await fetch(`/api/forms/${formId}`);
-      if (res.ok) {
-        const form: Form = await res.json();
-        setForm(form.id, form.fields, form.sharedResponse?.values || {});
-      } else {
-        console.error("Failed to fetch form");
-        router.push("/"); // Redirect if form not found or error
+      try {
+        setIsFormLoading(true);
+        setFormError(null);
+        const res = await fetch(`/api/forms/${formId}`);
+        if (res.ok) {
+          const form: Form = await res.json();
+          setForm(form.id, form.fields, form.sharedResponse?.values || {});
+        } else {
+          const errorText = await res.text();
+          console.error("Failed to fetch form:", errorText);
+          setFormError(`Failed to load form: ${res.status}`);
+          if (res.status === 404) {
+            router.push("/"); // Redirect if form not found
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching form:", error);
+        setFormError("Network error while loading form");
+      } finally {
+        setIsFormLoading(false);
       }
     };
 
@@ -89,6 +94,49 @@ export default function CollaborativeFormPage({ params }: { params: { formId: st
       }
     });
 
+    newSocket.on("typing-start", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
+      if (data.formId === formId && data.userId !== session.user?.id) {
+        setTypingUsers((prev) => {
+          const users = prev[data.fieldId] || [];
+          if (!users.includes(data.userName)) {
+            return { ...prev, [data.fieldId]: [...users, data.userName] };
+          }
+          return prev;
+        });
+      }
+    });
+
+    newSocket.on("typing-stop", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
+      if (data.formId === formId && data.userId !== session.user?.id) {
+        setTypingUsers((prev) => {
+          const users = (prev[data.fieldId] || []).filter((name) => name !== data.userName);
+          if (users.length === 0) {
+            const newTypingUsers = { ...prev };
+            delete newTypingUsers[data.fieldId];
+            return newTypingUsers;
+          }
+          return { ...prev, [data.fieldId]: users };
+        });
+      }
+    });
+
+    newSocket.on("current-locks", (data: { formId: string; locks: { fieldId: string; userId: string }[] }) => {
+      if (data.formId === formId) {
+        data.locks.forEach(lock => {
+          if (lock.userId !== session.user?.id) {
+            lockField(lock.fieldId, lock.userId);
+          }
+        });
+      }
+    });
+
+    newSocket.on("field-locked-by-other", (data: { formId: string; fieldId: string; lockedBy: string }) => {
+      if (data.formId === formId) {
+        // Optionally show a toast or message to the user that their lock attempt failed
+        console.warn(`Field ${data.fieldId} is locked by ${data.lockedBy}`);
+      }
+    });
+
     return () => {
       newSocket.off("field-update");
       newSocket.off("field-lock");
@@ -98,7 +146,21 @@ export default function CollaborativeFormPage({ params }: { params: { formId: st
   }, [formId, session, status, router, setForm, updateField, lockField, unlockField]);
 
   const handleFieldChange = (fieldId: string, value: string | number | boolean | string[]) => {
-    if (!socket || !session?.user?.id) return;
+    if (!socket || !session?.user?.id || !session?.user?.name) return;
+
+    // Clear any existing typing timeout for this field
+    if (typingTimeoutRef.current[fieldId]) {
+      clearTimeout(typingTimeoutRef.current[fieldId]);
+    }
+
+    // Emit typing-start event
+    socket.emit("typing-start", { formId, fieldId, userId: session.user.id, userName: session.user.name });
+
+    // Set a new timeout to emit typing-stop after a delay
+    typingTimeoutRef.current[fieldId] = setTimeout(() => {
+      socket.emit("typing-stop", { formId, fieldId, userId: session.user?.id, userName: session.user?.name });
+      delete typingTimeoutRef.current[fieldId];
+    }, 1000); // 1 second debounce for typing stop
 
     // Optimistic update
     updateField(fieldId, value);
@@ -150,8 +212,24 @@ export default function CollaborativeFormPage({ params }: { params: { formId: st
     return <p>Loading form...</p>;
   }
 
-  if (!formId || fields.length === 0) {
+  if (isFormLoading) {
     return <p>Loading form details...</p>;
+  }
+
+  if (formError) {
+    return <div className="flex min-h-screen flex-col items-center justify-center p-8">
+      <p className="text-red-500 mb-4">Error: {formError}</p>
+      <button 
+        onClick={() => window.location.reload()} 
+        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+      >
+        Retry
+      </button>
+    </div>;
+  }
+
+  if (!formId || fields.length === 0) {
+    return <p>No form data available.</p>;
   }
 
   return (
@@ -165,6 +243,11 @@ export default function CollaborativeFormPage({ params }: { params: { formId: st
               {lockedFields[field.id] && lockedFields[field.id] !== session.user?.id && (
                 <span className="ml-2 text-red-500 text-xs">
                   (Locked by {lockedFields[field.id]})
+                </span>
+              )}
+              {typingUsers[field.id] && typingUsers[field.id].length > 0 && (
+                <span className="ml-2 text-blue-500 text-xs">
+                  ({typingUsers[field.id].join(", ")} typing...)
                 </span>
               )}
             </label>

@@ -21,7 +21,7 @@ export async function GET(
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { formId } = params;
+    const { formId } = await params;
 
     const form = await prisma.form.findUnique({
       where: { id: formId },
@@ -146,7 +146,7 @@ export async function DELETE(
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { formId } = params;
+    const { formId } = await params;
 
     await prisma.form.delete({
       where: { id: formId },

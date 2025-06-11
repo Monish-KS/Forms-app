@@ -14,7 +14,7 @@ export async function GET(
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { formId } = params;
+    const { formId } = await params;
 
     const sharedResponse = await prisma.sharedResponse.findUnique({
       where: { formId: formId },
@@ -49,7 +49,7 @@ export async function POST(
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { formId } = params;
+    const { formId } = await params;
     const { values } = await req.json();
 
     if (typeof values !== "object" || values === null) {
