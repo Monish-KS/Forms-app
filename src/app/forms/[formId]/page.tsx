@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { getSocket } from "@/lib/socket";
+import { getSocket, onUserListUpdate, UserPresence } from "@/lib/socket";
 import { useFormStore } from "@/lib/store";
 import { Socket } from "socket.io-client";
 import { use } from "react";
@@ -34,8 +34,7 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isFormLoading, setIsFormLoading] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
-  const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({}); // fieldId -> array of userIds
-  const typingTimeoutRef = useRef<Record<string, NodeJS.Timeout>>({});
+  const [activeUsers, setActiveUsers] = useState<UserPresence[]>([]);
 
   useEffect(() => {
     if (status === "loading") return;
@@ -74,7 +73,17 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
     const newSocket = getSocket();
     setSocket(newSocket);
 
-    newSocket.emit("join-form", formId);
+    // Emit join-form with user details
+    newSocket.emit("join-form", {
+      formId,
+      userId: session.user.id,
+      userName: session.user.name,
+      userEmail: session.user.email,
+    });
+
+    const unsubscribeUserList = onUserListUpdate((users) => {
+      setActiveUsers(users);
+    });
 
     newSocket.on("field-update", (data: { formId: string; fieldId: string; value: string | number | boolean | string[] }) => {
       if (data.formId === formId) {
@@ -94,73 +103,17 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
       }
     });
 
-    newSocket.on("typing-start", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
-      if (data.formId === formId && data.userId !== session.user?.id) {
-        setTypingUsers((prev) => {
-          const users = prev[data.fieldId] || [];
-          if (!users.includes(data.userName)) {
-            return { ...prev, [data.fieldId]: [...users, data.userName] };
-          }
-          return prev;
-        });
-      }
-    });
-
-    newSocket.on("typing-stop", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
-      if (data.formId === formId && data.userId !== session.user?.id) {
-        setTypingUsers((prev) => {
-          const users = (prev[data.fieldId] || []).filter((name) => name !== data.userName);
-          if (users.length === 0) {
-            const newTypingUsers = { ...prev };
-            delete newTypingUsers[data.fieldId];
-            return newTypingUsers;
-          }
-          return { ...prev, [data.fieldId]: users };
-        });
-      }
-    });
-
-    newSocket.on("current-locks", (data: { formId: string; locks: { fieldId: string; userId: string }[] }) => {
-      if (data.formId === formId) {
-        data.locks.forEach(lock => {
-          if (lock.userId !== session.user?.id) {
-            lockField(lock.fieldId, lock.userId);
-          }
-        });
-      }
-    });
-
-    newSocket.on("field-locked-by-other", (data: { formId: string; fieldId: string; lockedBy: string }) => {
-      if (data.formId === formId) {
-        // Optionally show a toast or message to the user that their lock attempt failed
-        console.warn(`Field ${data.fieldId} is locked by ${data.lockedBy}`);
-      }
-    });
-
     return () => {
       newSocket.off("field-update");
       newSocket.off("field-lock");
       newSocket.off("field-unlock");
+      unsubscribeUserList();
       // Consider leaving the room or disconnecting if necessary
     };
   }, [formId, session, status, router, setForm, updateField, lockField, unlockField]);
 
   const handleFieldChange = (fieldId: string, value: string | number | boolean | string[]) => {
-    if (!socket || !session?.user?.id || !session?.user?.name) return;
-
-    // Clear any existing typing timeout for this field
-    if (typingTimeoutRef.current[fieldId]) {
-      clearTimeout(typingTimeoutRef.current[fieldId]);
-    }
-
-    // Emit typing-start event
-    socket.emit("typing-start", { formId, fieldId, userId: session.user.id, userName: session.user.name });
-
-    // Set a new timeout to emit typing-stop after a delay
-    typingTimeoutRef.current[fieldId] = setTimeout(() => {
-      socket.emit("typing-stop", { formId, fieldId, userId: session.user?.id, userName: session.user?.name });
-      delete typingTimeoutRef.current[fieldId];
-    }, 1000); // 1 second debounce for typing stop
+    if (!socket || !session?.user?.id) return;
 
     // Optimistic update
     updateField(fieldId, value);
@@ -235,6 +188,21 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
   return (
     <div className="flex min-h-screen flex-col items-center p-8">
       <h1 className="text-4xl font-bold mb-8">Collaborative Form: {formId}</h1>
+
+      {activeUsers.length > 0 && (
+        <div className="mb-4 p-3 bg-blue-100 rounded-lg w-full max-w-2xl">
+          <p className="text-blue-800 text-sm font-semibold">
+            Active Users:{" "}
+            {activeUsers.map((user, index) => (
+              <span key={user.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-200 text-blue-800 mr-2">
+                {user.name || user.email}
+                {user.id === session.user?.id && " (You)"}
+              </span>
+            ))}
+          </p>
+        </div>
+      )}
+
       <div className="w-full max-w-2xl p-8 border rounded-lg shadow-lg bg-white">
         {fields.map((field) => (
           <div key={field.id} className="mb-4">
@@ -243,11 +211,6 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
               {lockedFields[field.id] && lockedFields[field.id] !== session.user?.id && (
                 <span className="ml-2 text-red-500 text-xs">
                   (Locked by {lockedFields[field.id]})
-                </span>
-              )}
-              {typingUsers[field.id] && typingUsers[field.id].length > 0 && (
-                <span className="ml-2 text-blue-500 text-xs">
-                  ({typingUsers[field.id].join(", ")} typing...)
                 </span>
               )}
             </label>

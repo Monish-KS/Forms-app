@@ -9,114 +9,72 @@ const io = new Server(httpServer, {
   },
 });
 
-// In-memory store for active field locks: Map<formId-fieldId, { userId: string, timestamp: number }>
-const activeLocks = new Map<string, { userId: string; timestamp: number }>();
-const LOCK_TIMEOUT = 15 * 1000; // 15 seconds
+// Map to store active users in each form: formId -> Map<socketId, { id: string; name: string | null; email: string | null }>
+const usersInForms = new Map<string, Map<string, { id: string; name: string | null; email: string | null }>>();
 
-// Function to clean up expired locks
-setInterval(() => {
-  const now = Date.now();
-  activeLocks.forEach((lock, key) => {
-    if (now - lock.timestamp > LOCK_TIMEOUT) {
-      console.log(`Releasing expired lock for ${key} by ${lock.userId}`);
-      activeLocks.delete(key);
-      const [formId, fieldId] = key.split('-');
-      io.to(formId).emit("field-unlock", { formId, fieldId, userId: lock.userId, expired: true });
-    }
-  });
-}, 5000); // Check every 5 seconds
+// Map to store which form a socket is currently in
+const socketFormMap = new Map<string, string>();
+
+function broadcastUserList(formId: string) {
+  const users = Array.from(usersInForms.get(formId)?.values() || []);
+  io.to(formId).emit("user-list-update", { formId, users });
+  console.log(`Broadcasted user list for form ${formId}:`, users.map(u => u.name || u.email));
+}
 
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
-  socket.on("join-form", (formId: string) => {
-    socket.join(formId);
-    console.log(`User ${socket.id} joined form: ${formId}`);
-    // When a user joins, send them all current locks for this form
-    const currentFormLocks: { fieldId: string; userId: string }[] = [];
-    activeLocks.forEach((lock, key) => {
-      const [lockFormId, fieldId] = key.split('-');
-      if (lockFormId === formId) {
-        currentFormLocks.push({ fieldId, userId: lock.userId });
+  socket.on("join-form", (data: { formId: string; userId: string; userName: string | null; userEmail: string | null }) => {
+    const { formId, userId, userName, userEmail } = data;
+
+    // Leave any previously joined form
+    const previousFormId = socketFormMap.get(socket.id);
+    if (previousFormId && usersInForms.has(previousFormId)) {
+      usersInForms.get(previousFormId)?.delete(socket.id);
+      if (usersInForms.get(previousFormId)?.size === 0) {
+        usersInForms.delete(previousFormId);
       }
-    });
-    socket.emit("current-locks", { formId, locks: currentFormLocks });
+      broadcastUserList(previousFormId);
+    }
+
+    socket.join(formId);
+    socketFormMap.set(socket.id, formId);
+
+    if (!usersInForms.has(formId)) {
+      usersInForms.set(formId, new Map());
+    }
+    usersInForms.get(formId)?.set(socket.id, { id: userId, name: userName, email: userEmail });
+
+    console.log(`User ${userName || userEmail} (${userId}) joined form: ${formId}`);
+    broadcastUserList(formId);
   });
 
   socket.on("field-update", (data: { formId: string; fieldId: string; value: string | number | boolean | string[] }) => {
     console.log(`Field update in form ${data.formId}: ${data.fieldId} = ${data.value}`);
-    // Check if the field is locked by someone else
-    const lockKey = `${data.formId}-${data.fieldId}`;
-    const currentLock = activeLocks.get(lockKey);
-
-    if (currentLock && currentLock.userId !== socket.id) {
-      // Field is locked by another user, reject update
-      console.log(`Update rejected: Field ${data.fieldId} in form ${data.formId} is locked by ${currentLock.userId}`);
-      socket.emit("field-locked-by-other", { formId: data.formId, fieldId: data.fieldId, lockedBy: currentLock.userId });
-      return;
-    }
-
-    // If it's locked by this user, update timestamp
-    if (currentLock && currentLock.userId === socket.id) {
-      activeLocks.set(lockKey, { userId: socket.id, timestamp: Date.now() });
-    }
-
     socket.to(data.formId).emit("field-update", data); // Broadcast to others in the room
   });
 
   socket.on("field-lock", (data: { formId: string; fieldId: string; userId: string }) => {
-    const lockKey = `${data.formId}-${data.fieldId}`;
-    if (activeLocks.has(lockKey)) {
-      const currentLock = activeLocks.get(lockKey);
-      if (currentLock && currentLock.userId !== data.userId) {
-        // Field is already locked by another user
-        console.log(`Lock rejected: Field ${data.fieldId} in form ${data.formId} is already locked by ${currentLock.userId}`);
-        socket.emit("field-locked-by-other", { formId: data.formId, fieldId: data.fieldId, lockedBy: currentLock.userId });
-        return;
-      }
-    }
-
-    // Acquire lock or update timestamp if already locked by this user
-    activeLocks.set(lockKey, { userId: data.userId, timestamp: Date.now() });
-    console.log(`Field lock acquired for ${data.formId}: ${data.fieldId} by ${data.userId}`);
-    socket.to(data.formId).emit("field-lock", data); // Broadcast to others in the room
+    console.log(`Field lock in form ${data.formId}: ${data.fieldId} by ${data.userId}`);
+    socket.to(data.formId).emit("field-lock", data);
   });
 
   socket.on("field-unlock", (data: { formId: string; fieldId: string; userId: string }) => {
-    const lockKey = `${data.formId}-${data.fieldId}`;
-    if (activeLocks.has(lockKey)) {
-      const currentLock = activeLocks.get(lockKey);
-      if (currentLock && currentLock.userId === data.userId) {
-        activeLocks.delete(lockKey);
-        console.log(`Field unlock for ${data.formId}: ${data.fieldId} by ${data.userId}`);
-        socket.to(data.formId).emit("field-unlock", data); // Broadcast to others in the room
-      } else {
-        console.log(`Unlock rejected: Field ${data.fieldId} in form ${data.formId} is locked by ${currentLock?.userId || 'unknown'} not ${data.userId}`);
-      }
-    }
-  });
-
-  socket.on("typing-start", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
-    console.log(`Typing start in form ${data.formId}: ${data.fieldId} by ${data.userName}`);
-    socket.to(data.formId).emit("typing-start", data); // Broadcast to others in the room
-  });
-
-  socket.on("typing-stop", (data: { formId: string; fieldId: string; userId: string; userName: string }) => {
-    console.log(`Typing stop in form ${data.formId}: ${data.fieldId} by ${data.userName}`);
-    socket.to(data.formId).emit("typing-stop", data); // Broadcast to others in the room
+    console.log(`Field unlock in form ${data.formId}: ${data.fieldId} by ${data.userId}`);
+    socket.to(data.formId).emit("field-unlock", data);
   });
 
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
-    // Release all locks held by the disconnected user
-    activeLocks.forEach((lock, key) => {
-      if (lock.userId === socket.id) {
-        activeLocks.delete(key);
-        const [formId, fieldId] = key.split('-');
-        io.to(formId).emit("field-unlock", { formId, fieldId, userId: socket.id, disconnected: true });
-        console.log(`Released lock for ${key} due to disconnect of ${socket.id}`);
+    const formId = socketFormMap.get(socket.id);
+    if (formId && usersInForms.has(formId)) {
+      usersInForms.get(formId)?.delete(socket.id);
+      if (usersInForms.get(formId)?.size === 0) {
+        usersInForms.delete(formId);
       }
-    });
+      broadcastUserList(formId);
+    }
+    socketFormMap.delete(socket.id);
   });
 });
 

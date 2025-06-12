@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { nanoid } from "nanoid";
 
 interface FormField {
   type: string;
@@ -56,11 +57,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "User ID not found in session" }, { status: 401 });
     }
 
+    const joinCode = nanoid(8); // Generate an 8-character unique join code
+
     const newForm = await prisma.form.create({
       data: {
         title,
         description,
         createdById: session.user.id,
+        joinCode, // Add the generated join code
         fields: {
           create: fields.map((field: FormField) => ({
             type: field.type,

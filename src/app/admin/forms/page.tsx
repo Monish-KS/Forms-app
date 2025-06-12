@@ -16,6 +16,7 @@ interface Form {
   id: string;
   title: string;
   description?: string;
+  joinCode?: string; // Add joinCode here
   fields: FormField[];
   createdById: string;
   createdBy: {
@@ -23,7 +24,6 @@ interface Form {
     name?: string | null;
     email?: string | null;
   };
-  joinCode?: string | null; // Add joinCode to the Form interface
 }
 
 export default function AdminFormsPage() {
@@ -107,19 +107,6 @@ export default function AdminFormsPage() {
     }
   };
 
-  const handleGenerateJoinCode = async (formId: string) => {
-    if (window.confirm("Are you sure you want to generate a new join code for this form? This will overwrite any existing code.")) {
-      const res = await fetch(`/api/forms/${formId}/generate-join-code`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        fetchForms(); // Refresh forms to show the new join code
-      } else {
-        console.error("Failed to generate join code");
-      }
-    }
-  };
-
   if (status === "loading" || !session || session.user?.role !== "admin") {
     return <p>Loading admin dashboard...</p>;
   }
@@ -161,20 +148,20 @@ export default function AdminFormsPage() {
                 <div>
                   <h3 className="text-xl font-semibold">{form.title}</h3>
                   <p className="text-gray-600">{form.description}</p>
-                  <p className="text-sm text-gray-500">Created by: {form.createdBy?.name || form.createdBy?.email}</p>
                   {form.joinCode && (
-                    <p className="text-sm text-gray-700 mt-2">Join Code: <span className="font-semibold">{form.joinCode}</span></p>
+                    <p className="text-sm text-gray-700">
+                      Join Code: <span className="font-mono bg-gray-200 px-1 rounded">{form.joinCode}</span>
+                    </p>
                   )}
+                  <p className="text-sm text-gray-500">Created by: {form.createdBy?.name || form.createdBy?.email}</p>
                 </div>
                 <div className="flex space-x-2">
-                  {!form.joinCode && (
-                    <button
-                      onClick={() => handleGenerateJoinCode(form.id)}
-                      className="bg-purple-500 hover:bg-purple-700 text-white font-bold py-1 px-3 rounded text-sm"
-                    >
-                      Generate Join Code
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleGenerateJoinCode(form.id)}
+                    className="bg-purple-500 hover:bg-purple-700 text-white font-bold py-1 px-3 rounded text-sm"
+                  >
+                    Generate New Join Code
+                  </button>
                   <button
                     onClick={() => {
                       setEditingForm(form);
@@ -198,4 +185,37 @@ export default function AdminFormsPage() {
       </div>
     </div>
   );
+
+  async function handleGenerateJoinCode(formId: string) {
+    if (!window.confirm("Are you sure you want to generate a new join code for this form? The old one will become invalid.")) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/forms/${formId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ action: "generateJoinCode" }),
+      });
+
+      if (res.ok) {
+        const updatedForm = await res.json();
+        setForms((prevForms) =>
+          prevForms.map((form) =>
+            form.id === updatedForm.id ? { ...form, joinCode: updatedForm.joinCode } : form
+          )
+        );
+        alert(`New Join Code generated: ${updatedForm.joinCode}`);
+      } else {
+        const errorData = await res.json();
+        alert(`Failed to generate new join code: ${errorData.message || "Unknown error"}`);
+        console.error("Failed to generate new join code:", errorData);
+      }
+    } catch (error) {
+      alert("An unexpected error occurred while generating a new join code.");
+      console.error("Error generating new join code:", error);
+    }
+  }
 }

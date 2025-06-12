@@ -48,3 +48,5 @@ collaborative-forms-app
 architectural_plan.md
 requirements.md
 
+socket-server/node_modules
+socket-server\node_modules

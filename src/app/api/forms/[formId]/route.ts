@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { nanoid } from "nanoid";
 
 interface FormField {
   id?: string; // id is optional for new fields
@@ -155,6 +156,43 @@ export async function DELETE(
     return NextResponse.json({ message: "Form deleted successfully" }, { status: 200 });
   } catch (error) {
     console.error("Error deleting form:", error);
+    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: { formId: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+
+    if (!session || session.user?.role !== "admin") {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
+
+    const { formId } = params;
+    const { action } = await req.json();
+
+    if (action === "generateJoinCode") {
+      const newJoinCode = nanoid(8); // Generate an 8-character unique join code
+
+      const updatedForm = await prisma.form.update({
+        where: { id: formId },
+        data: {
+          joinCode: newJoinCode,
+        },
+        select: {
+          id: true,
+          joinCode: true,
+        },
+      });
+      return NextResponse.json(updatedForm, { status: 200 });
+    }
+
+    return NextResponse.json({ message: "Invalid action" }, { status: 400 });
+  } catch (error) {
+    console.error("Error updating form with PATCH:", error);
     return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
   }
 }
