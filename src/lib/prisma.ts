@@ -5,10 +5,10 @@ let prisma: PrismaClient;
 if (process.env.NODE_ENV === "production") {
   prisma = new PrismaClient();
 } else {
-  if (!((globalThis as any).prisma as PrismaClient | undefined)) {
-    (globalThis as any).prisma = new PrismaClient();
+  if (!(globalThis as typeof globalThis & { prisma?: PrismaClient }).prisma) {
+    (globalThis as typeof globalThis & { prisma: PrismaClient }).prisma = new PrismaClient();
   }
-  prisma = (globalThis as any).prisma as PrismaClient;
+  prisma = (globalThis as typeof globalThis & { prisma: PrismaClient }).prisma;
 }
 
 export default prisma;

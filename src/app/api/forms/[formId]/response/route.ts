@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next"; // Changed this line
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 
 export async function GET(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -32,15 +32,21 @@ export async function GET(
     }
 
     return NextResponse.json(sharedResponse);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error fetching shared response:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json(
+      {
+        message: "Failed to fetch shared response",
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -68,8 +74,14 @@ export async function POST(
     });
 
     return NextResponse.json(updatedResponse);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error updating shared response:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json(
+      {
+        message: "Failed to update shared response",
+        error: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 }
+    );
   }
 }

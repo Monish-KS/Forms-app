@@ -32,7 +32,8 @@ export default function AdminFormsPage() {
 
   useEffect(() => {
     if (status === "loading") return; // Do nothing while loading
-    if (!session || session.user?.role !== "admin") {
+    const user = session?.user as { role?: string } | undefined;
+    if (!session || !user?.role || user.role !== "admin") {
       router.push("/auth/signin"); // Redirect to sign-in if not authenticated or not admin
     }
   }, [session, status, router]);
@@ -53,7 +54,8 @@ export default function AdminFormsPage() {
 
   useEffect(() => {
     if (status === "loading") return;
-    if (!session || session.user?.role !== "admin") {
+    const user = session?.user as { role?: string } | undefined;
+    if (!session || !user?.role || user.role !== "admin") {
       router.push("/auth/signin");
     } else {
       fetchForms();
@@ -107,7 +109,8 @@ export default function AdminFormsPage() {
     }
   };
 
-  if (status === "loading" || !session || session.user?.role !== "admin") {
+  const user = session?.user as { role?: string } | undefined;
+  if (status === "loading" || !session || !user?.role || user.role !== "admin") {
     return <p>Loading admin dashboard...</p>;
   }
 

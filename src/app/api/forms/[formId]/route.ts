@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession } from "next-auth/next";
+import type { Session } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { nanoid } from "nanoid";
@@ -11,9 +12,16 @@ interface FormField {
   options?: string[];
 }
 
+interface ExistingFormField {
+  id: string;
+  type: string;
+  label: string;
+  options?: string[];
+}
+
 export async function GET(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -44,20 +52,20 @@ export async function GET(
     }
 
     return NextResponse.json(form);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error fetching form:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ message: "Failed to fetch form", error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }
 }
 
 export async function PUT(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(authOptions) as Session | null;
 
-    if (!session || session.user?.role !== "admin") {
+    if (!session || !session.user || session.user.role !== "admin") {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
@@ -78,12 +86,12 @@ export async function PUT(
       return NextResponse.json({ message: "Form not found" }, { status: 404 });
     }
 
-    const existingFieldIds = new Set(existingForm.fields.map((f) => f.id));
+    const existingFieldIds = new Set(existingForm.fields.map((f: ExistingFormField) => f.id));
     const incomingFieldIds = new Set(fields.map((f: FormField) => f.id).filter(Boolean));
 
     // Fields to delete
     const fieldsToDelete = existingForm.fields.filter(
-      (field) => !incomingFieldIds.has(field.id)
+      (field: ExistingFormField) => !incomingFieldIds.has(field.id)
     );
 
     // Fields to update or create
@@ -112,7 +120,7 @@ export async function PUT(
     });
 
     // Delete fields that are no longer present
-    const deleteOperations = fieldsToDelete.map((field) =>
+    const deleteOperations = fieldsToDelete.map((field: ExistingFormField) =>
       prisma.field.delete({ where: { id: field.id } })
     );
 
@@ -130,20 +138,20 @@ export async function PUT(
     });
 
     return NextResponse.json(updatedForm);
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error updating form:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ message: "Failed to update form", error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }
 }
 
 export async function DELETE(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(authOptions) as Session | null;
 
-    if (!session || session.user?.role !== "admin") {
+    if (!session || !session.user || session.user.role !== "admin") {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
@@ -154,24 +162,24 @@ export async function DELETE(
     });
 
     return NextResponse.json({ message: "Form deleted successfully" }, { status: 200 });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error deleting form:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ message: "Failed to delete form", error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }
 }
 
 export async function PATCH(
   req: Request,
-  { params }: { params: { formId: string } }
+  { params }: { params: Promise<{ formId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession(authOptions) as Session | null;
 
-    if (!session || session.user?.role !== "admin") {
+    if (!session || !session.user || session.user.role !== "admin") {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const { formId } = params;
+    const { formId } = await params;
     const { action } = await req.json();
 
     if (action === "generateJoinCode") {
@@ -191,8 +199,8 @@ export async function PATCH(
     }
 
     return NextResponse.json({ message: "Invalid action" }, { status: 400 });
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("Error updating form with PATCH:", error);
-    return NextResponse.json({ message: "Internal Server Error" }, { status: 500 });
+    return NextResponse.json({ message: "Failed to update form (PATCH)", error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
   }
 }

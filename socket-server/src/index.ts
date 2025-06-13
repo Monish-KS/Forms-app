@@ -4,7 +4,7 @@ import http from "http";
 const httpServer = http.createServer();
 const io = new Server(httpServer, {
   cors: {
-    origin: "*", // Allow all origins for now, refine in production
+    origin: process.env.CORS_ORIGIN || "*", // Allow specific origins in production, all for development
     methods: ["GET", "POST"],
   },
 });

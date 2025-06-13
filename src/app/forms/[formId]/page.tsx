@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react"; // Added useMemo
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { getSocket, onUserListUpdate, UserPresence } from "@/lib/socket";
 import { useFormStore } from "@/lib/store";
 import { Socket } from "socket.io-client";
 import { use } from "react";
+// import { Session } from "next-auth"; // Removed unused Session import
 
 interface FormField {
   id: string;
@@ -26,6 +27,24 @@ interface Form {
   };
 }
 
+// Define a type for our extended user
+type ExtendedUser = {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  image?: string | null;
+  role?: string;
+};
+
+// Move debounce function outside component
+function createDebounce<Args extends unknown[]>(func: (...args: Args) => unknown, delay: number): (...args: Args) => void {
+  let timeout: NodeJS.Timeout;
+  return ((...args: Args) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), delay);
+  });
+}
+
 export default function CollaborativeFormPage({ params }: { params: Promise<{ formId: string }> }) {
   const { formId } = use(params);
   const { data: session, status } = useSession();
@@ -39,6 +58,12 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
   useEffect(() => {
     if (status === "loading") return;
     if (!session) {
+      router.push("/auth/signin");
+      return;
+    }
+
+    const user = session.user as ExtendedUser | undefined;
+    if (!user?.id) {
       router.push("/auth/signin");
       return;
     }
@@ -76,9 +101,9 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
     // Emit join-form with user details
     newSocket.emit("join-form", {
       formId,
-      userId: session.user.id,
-      userName: session.user.name,
-      userEmail: session.user.email,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
     });
 
     const unsubscribeUserList = onUserListUpdate((users) => {
@@ -91,9 +116,9 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
       }
     });
 
-    newSocket.on("field-lock", (data: { formId: string; fieldId: string; userId: string }) => {
+    newSocket.on("field-lock", (data: { formId: string; fieldId: string; userId: string; userName: string | null; userEmail: string | null }) => {
       if (data.formId === formId) {
-        lockField(data.fieldId, data.userId);
+        lockField(data.fieldId, data.userId, data.userName, data.userEmail);
       }
     });
 
@@ -113,7 +138,8 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
   }, [formId, session, status, router, setForm, updateField, lockField, unlockField]);
 
   const handleFieldChange = (fieldId: string, value: string | number | boolean | string[]) => {
-    if (!socket || !session?.user?.id) return;
+    const user = session?.user as ExtendedUser | undefined;
+    if (!socket || !session || !user?.id) return;
 
     // Optimistic update
     updateField(fieldId, value);
@@ -124,45 +150,52 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
     debouncedSave(formId, { ...sharedResponse, [fieldId]: value });
   };
 
-  const debouncedSave = useCallback(
-    debounce(async (currentFormId: string, currentSharedResponse: { [key: string]: string | number | boolean | string[] }) => {
-      console.log("Saving to DB:", currentFormId, currentSharedResponse);
-      const res = await fetch(`/api/forms/${currentFormId}/response`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ values: currentSharedResponse }),
-      });
+  const saveToDatabase = useCallback(async (currentFormId: string, currentSharedResponse: { [key: string]: string | number | boolean | string[] }) => {
+    console.log("Saving to DB:", currentFormId, currentSharedResponse);
+    const res = await fetch(`/api/forms/${currentFormId}/response`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values: currentSharedResponse }),
+    });
 
-      if (!res.ok) {
-        console.error("Failed to save shared response", await res.text());
-      }
-    }, 1000), // Debounce for 1 second
-    []
+    if (!res.ok) {
+      console.error("Failed to save shared response", await res.text());
+    }
+  }, []);
+
+  // Changed from useCallback to useMemo for debouncedSave
+  const debouncedSave = useMemo(
+    () => createDebounce(saveToDatabase, 1000), // Debounce for 1 second
+    [saveToDatabase] // Dependency is saveToDatabase
   );
 
-  // Simple debounce function
-  function debounce<Args extends unknown[]>(func: (...args: Args) => unknown, delay: number): (...args: Args) => void {
-    let timeout: NodeJS.Timeout;
-    return ((...args: Args) => {
-      clearTimeout(timeout);
-      timeout = setTimeout(() => func(...args), delay);
-    });
-  }
-
   const handleFieldFocus = (fieldId: string) => {
-    if (!socket || !session?.user?.id) return;
-    socket.emit("field-lock", { formId, fieldId, userId: session.user.id });
+    const user = session?.user as ExtendedUser | undefined;
+    if (!socket || !user?.id) return;
+    socket.emit("field-lock", {
+      formId,
+      fieldId,
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+    });
   };
 
   const handleFieldBlur = (fieldId: string) => {
-    if (!socket || !session?.user?.id) return;
-    socket.emit("field-unlock", { formId, fieldId, userId: session.user.id });
+    const user = session?.user as ExtendedUser | undefined;
+    if (!socket || !user?.id) return;
+    socket.emit("field-unlock", { formId, fieldId, userId: user.id });
   };
 
   if (status === "loading" || !session) {
     return <p>Loading form...</p>;
+  }
+
+  const user = session.user as ExtendedUser | undefined;
+  if (!user?.id) {
+    return <p>User not authenticated</p>;
   }
 
   if (isFormLoading) {
@@ -172,8 +205,8 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
   if (formError) {
     return <div className="flex min-h-screen flex-col items-center justify-center p-8">
       <p className="text-red-500 mb-4">Error: {formError}</p>
-      <button 
-        onClick={() => window.location.reload()} 
+      <button
+        onClick={() => window.location.reload()}
         className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
       >
         Retry
@@ -193,10 +226,10 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
         <div className="mb-4 p-3 bg-blue-100 rounded-lg w-full max-w-2xl">
           <p className="text-blue-800 text-sm font-semibold">
             Active Users:{" "}
-            {activeUsers.map((user, index) => (
+            {activeUsers.map((user) => (
               <span key={user.id} className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-200 text-blue-800 mr-2">
                 {user.name || user.email}
-                {user.id === session.user?.id && " (You)"}
+                {user.id === (session.user as ExtendedUser)?.id && " (You)"}
               </span>
             ))}
           </p>
@@ -208,9 +241,9 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
           <div key={field.id} className="mb-4">
             <label className="block text-gray-700 text-sm font-bold mb-2">
               {field.label}
-              {lockedFields[field.id] && lockedFields[field.id] !== session.user?.id && (
+              {lockedFields[field.id] && lockedFields[field.id]?.userId !== (session.user as ExtendedUser)?.id && (
                 <span className="ml-2 text-red-500 text-xs">
-                  (Locked by {lockedFields[field.id]})
+                  (Locked by {lockedFields[field.id]?.userName || lockedFields[field.id]?.userEmail})
                 </span>
               )}
             </label>
@@ -222,7 +255,7 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
                 onChange={(e) => handleFieldChange(field.id, e.target.value)}
                 onFocus={() => handleFieldFocus(field.id)}
                 onBlur={() => handleFieldBlur(field.id)}
-                disabled={!!lockedFields[field.id] && lockedFields[field.id] !== session.user?.id}
+                disabled={!!lockedFields[field.id] && lockedFields[field.id]?.userId !== (session.user as ExtendedUser)?.id}
               />
             )}
             {field.type === "number" && (
@@ -233,7 +266,7 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
                 onChange={(e) => handleFieldChange(field.id, parseFloat(e.target.value))}
                 onFocus={() => handleFieldFocus(field.id)}
                 onBlur={() => handleFieldBlur(field.id)}
-                disabled={!!lockedFields[field.id] && lockedFields[field.id] !== session.user?.id}
+                disabled={!!lockedFields[field.id] && lockedFields[field.id]?.userId !== (session.user as ExtendedUser)?.id}
               />
             )}
             {field.type === "dropdown" && (
@@ -243,7 +276,7 @@ export default function CollaborativeFormPage({ params }: { params: Promise<{ fo
                 onChange={(e) => handleFieldChange(field.id, e.target.value)}
                 onFocus={() => handleFieldFocus(field.id)}
                 onBlur={() => handleFieldBlur(field.id)}
-                disabled={!!lockedFields[field.id] && lockedFields[field.id] !== session.user?.id}
+                disabled={!!lockedFields[field.id] && lockedFields[field.id]?.userId !== (session.user as ExtendedUser)?.id}
               >
                 <option value="">Select an option</option>
                 {field.options?.map((option) => (

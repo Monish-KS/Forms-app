@@ -1,10 +1,22 @@
 "use client";
 
 import { useSession, signOut } from "next-auth/react";
+import type { Session } from "next-auth";
 import Link from "next/link";
 
+// Extend the session type to include our custom properties
+type ExtendedSession = Session & {
+  user: {
+    id: string;
+    name?: string | null;
+    email?: string | null;
+    image?: string | null;
+    role: string;
+  };
+};
+
 export default function Home() {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useSession() as { data: ExtendedSession | null; status: string };
 
   if (status === "loading") {
     return <p>Loading...</p>;
