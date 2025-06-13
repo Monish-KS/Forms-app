@@ -195,13 +195,12 @@ To set up and run the application locally using Docker:
 4.  **Run Prisma Migrations**:
     Once the PostgreSQL container is running (you can check `docker-compose logs db`), run the Prisma migrations to set up your database schema. You'll need to execute this command from within the `proactively` directory:
     ```bash
-    docker-compose exec app npx prisma migrate dev --name initial_setup
+    docker-compose exec nextjs-app npx prisma migrate deploy
     ```
-    If you have existing migrations, you might just need `docker-compose exec app npx prisma migrate deploy`.
 
 5.  **Generate Prisma Client**:
     ```bash
-    docker-compose exec app npx prisma generate
+    docker-compose exec nextjs-app npx prisma generate
     ```
 
 6.  **Access the Application**:

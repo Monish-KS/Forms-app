@@ -1,7 +1,7 @@
 import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
-import { PrismaClient } from "@prisma/client";
+import prisma from "./prisma";
 
 declare module "next-auth" {
   interface Session {
@@ -29,8 +29,6 @@ declare module "next-auth/jwt" {
     role: string;
   }
 }
-
-const prisma = new PrismaClient();
 
 export const authOptions = {
   adapter: PrismaAdapter(prisma),
@@ -93,4 +91,5 @@ export const authOptions = {
   },
 } as const;
 
-export default NextAuth(authOptions);
+export const handler = NextAuth(authOptions);
+export { handler as GET, handler as POST };
