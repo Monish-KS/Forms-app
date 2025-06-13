@@ -165,8 +165,8 @@ To set up and run the application locally using Docker:
 
 1.  **Clone the repository**:
     ```bash
-    git clone [repository-url]
-    cd proactively
+    git clone https://github.com/Monish-KS/Forms-app
+    cd Forms-app
     ```
 
 2.  **Environment Variables**:
@@ -217,8 +217,8 @@ If you prefer not to use Docker, you can set up and run the application manually
 
 2.  **Clone the repository**:
     ```bash
-    git clone [repository-url]
-    cd proactively
+    git clone https://github.com/Monish-KS/Forms-app
+    cd Forms-app
     ```
 
 3.  **Environment Variables**:
